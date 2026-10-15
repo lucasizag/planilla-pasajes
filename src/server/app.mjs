@@ -5,10 +5,13 @@ import {
   aplicarOperacion,
   configPorDefecto,
   crearDia,
-  fijoPresenteEditado,
+  limpiarCancelacion,
   limpiarFijo,
+  normalizarFijo,
+  quitarTramosFijo,
+  registrar,
+  limpiarChofer,
   nuevoId,
-  quitarFijoNoEditado,
   sumarMinutos,
   validarFecha,
   validarHora,
@@ -34,22 +37,24 @@ export function crearApp({ store, entorno }) {
   const env = (k) => entorno[k];
 
   const cargarConfig = async () => (await leer(store, 'config')).datos || configPorDefecto();
-  const cargarFijos = async () => (await leer(store, 'fijos')).datos || [];
+  const cargarFijos = async () => ((await leer(store, 'fijos')).datos || []).map(normalizarFijo);
 
   const crearDiaNuevo = (fecha) => async () => crearDia(fecha, await cargarConfig(), await cargarFijos());
 
-  async function sincronizarFijoEnDias(fijoId, fijo) {
-    // Solo días futuros ya abiertos. Hoy no se toca: para hoy está el botón "Cargar fijos".
+  // Actualiza los días ya abiertos desde hoy en adelante para que reflejen la ficha del fijo.
+  // Los tramos que una telefonista modificó a mano en un día se respetan.
+  async function sincronizarFijoEnDias(fijoId, fijo, soloFecha = null) {
     const desde = hoyArgentina();
     const { blobs } = await store.list({ prefix: 'dias/' });
-    const claves = blobs.map((b) => b.key).filter((k) => k.slice(5) > desde);
+    const claves = blobs.map((b) => b.key).filter((k) => (soloFecha ? k.slice(5) === soloFecha : k.slice(5) >= desde));
     for (const clave of claves) {
       await actualizar(
         store,
         clave,
         (dia) => {
-          quitarFijoNoEditado(dia, fijoId);
-          if (fijo && !fijoPresenteEditado(dia, fijoId)) aplicarFijos(dia, [fijo], 'sistema');
+          if (!dia) return;
+          quitarTramosFijo(dia, fijoId, { soloNoEditados: true });
+          if (fijo) aplicarFijos(dia, [fijo], 'sistema');
         },
         () => null,
       );
@@ -93,7 +98,7 @@ export function crearApp({ store, entorno }) {
         const { op } = await cuerpo();
         const fijos = op?.tipo === 'cargarFijos' ? await cargarFijos() : [];
         const r = await actualizar(store, clave, (dia) => aplicarOperacion(dia, op, usuario, fijos), crearDiaNuevo(fecha));
-        if ((op.tipo === 'agregarPasajero' || op.tipo === 'editarPasajero') && r.resultado?.pasajero) {
+        if (['agregarPasajero', 'editarPasajero', 'nuevoViaje'].includes(op.tipo) && r.resultado?.pasajero) {
           const franja = r.datos.franjas.find((f) => f.autos.some((a) => a.lugares.some((p) => p && p.id === r.resultado.pasajero.id)));
           if (franja) await guardarEnAgenda(r.resultado.pasajero, franja.sentido);
         }
@@ -106,12 +111,58 @@ export function crearApp({ store, entorno }) {
       if (metodo === 'GET' && !partes[1]) return json({ fijos: await cargarFijos() });
       if (metodo === 'POST' && !partes[1]) {
         const { fijo } = await cuerpo();
-        const nuevo = { id: nuevoId(), ...limpiarFijo(fijo), creadoPor: usuario, creadoEn: new Date().toISOString() };
+        const nuevo = { id: nuevoId(), ...limpiarFijo(fijo), cancelaciones: [], creadoPor: usuario, creadoEn: new Date().toISOString() };
         await actualizar(store, 'fijos', (lista) => { lista.push(nuevo); }, () => []);
         await sincronizarFijoEnDias(nuevo.id, nuevo);
         return json({ fijo: nuevo, fijos: await cargarFijos() });
       }
-      if (partes[1] && (metodo === 'PUT' || metodo === 'DELETE')) {
+      // Cancelar o reactivar un viaje puntual: /api/fijos/:id/cancelar  y  /api/fijos/:id/reactivar
+      if (partes[1] && (partes[2] === 'cancelar' || partes[2] === 'reactivar') && metodo === 'POST') {
+        const id = partes[1];
+        const hoy = hoyArgentina();
+        const { fecha, tramo } = limpiarCancelacion(await cuerpo(), partes[2] === 'cancelar' ? hoy : null);
+        let fijo = null;
+        await actualizar(store, 'fijos', (lista) => {
+          const i = lista.findIndex((f) => f.id === id);
+          if (i < 0) throw new ErrorNegocio('Ese pasajero fijo ya no existe.', 404);
+          const f = normalizarFijo(lista[i]);
+          // limpia cancelaciones de hace más de 30 días
+          const limite = new Date(hoy + 'T12:00:00Z');
+          limite.setUTCDate(limite.getUTCDate() - 30);
+          let canc = (f.cancelaciones || []).filter((c) => c.fecha >= limite.toISOString().slice(0, 10));
+          const previa = canc.find((c) => c.fecha === fecha);
+          canc = canc.filter((c) => c.fecha !== fecha);
+          let queda = null;
+          if (partes[2] === 'cancelar') {
+            queda = previa && previa.tramo !== tramo ? 'ambos' : tramo;
+          } else if (previa && tramo !== 'ambos' && previa.tramo === 'ambos') {
+            queda = tramo === 'ida' ? 'vuelta' : 'ida';
+          } else if (previa && tramo !== 'ambos' && previa.tramo !== tramo) {
+            queda = previa.tramo;
+          }
+          if (queda) canc.push({ fecha, tramo: queda, por: usuario, en: new Date().toISOString() });
+          canc.sort((a, b) => a.fecha.localeCompare(b.fecha));
+          lista[i] = { ...f, cancelaciones: canc };
+          fijo = lista[i];
+        }, () => []);
+        // Si ese día ya está abierto, se actualiza la planilla.
+        const { datos: diaExistente } = await leer(store, `dias/${fecha}`);
+        if (diaExistente) {
+          await actualizar(store, `dias/${fecha}`, (dia) => {
+            const etiqueta = tramo === 'ambos' ? 'ida y vuelta' : tramo;
+            if (partes[2] === 'cancelar') {
+              const n = quitarTramosFijo(dia, id, { tramo });
+              registrar(dia, usuario, `canceló el viaje de ${fijo.nombre} (${etiqueta})${n ? '' : ' — no estaba en la planilla'}`);
+            } else {
+              dia.fijosQuitados = (dia.fijosQuitados || []).filter((k) => k !== id && !(k.startsWith(id + ':') && (tramo === 'ambos' || k.endsWith(':' + tramo))));
+              const n = aplicarFijos(dia, [fijo], 'sistema');
+              registrar(dia, usuario, `reactivó el viaje de ${fijo.nombre} (${etiqueta})${n ? '' : ' — no se agregó nada'}`);
+            }
+          }, () => null);
+        }
+        return json({ fijo, fijos: await cargarFijos() });
+      }
+      if (partes[1] && !partes[2] && (metodo === 'PUT' || metodo === 'DELETE')) {
         const id = partes[1];
         let resultado = null;
         if (metodo === 'PUT') {
@@ -120,7 +171,9 @@ export function crearApp({ store, entorno }) {
           await actualizar(store, 'fijos', (lista) => {
             const i = lista.findIndex((f) => f.id === id);
             if (i < 0) throw new ErrorNegocio('Ese pasajero fijo ya no existe.', 404);
-            lista[i] = { ...lista[i], ...limpio, modificadoPor: usuario, modificadoEn: new Date().toISOString() };
+            const { dias, desde, hasta, ...anterior } = normalizarFijo(lista[i]);
+            void dias, desde, hasta;
+            lista[i] = { ...anterior, ...limpio, modificadoPor: usuario, modificadoEn: new Date().toISOString() };
             resultado = lista[i];
           }, () => []);
         } else {
@@ -131,6 +184,35 @@ export function crearApp({ store, entorno }) {
         }
         await sincronizarFijoEnDias(id, resultado);
         return json({ fijo: resultado, fijos: await cargarFijos() });
+      }
+    }
+
+    // /api/choferes
+    if (partes[0] === 'choferes') {
+      const lista = async () => (await leer(store, 'choferes')).datos || [];
+      if (metodo === 'GET' && !partes[1]) return json({ choferes: await lista() });
+      if (metodo === 'POST' && !partes[1]) {
+        const { chofer } = await cuerpo();
+        const nuevo = { id: nuevoId(), ...limpiarChofer(chofer) };
+        await actualizar(store, 'choferes', (l) => { l.push(nuevo); }, () => []);
+        return json({ chofer: nuevo, choferes: await lista() });
+      }
+      if (partes[1] && metodo === 'PUT') {
+        const { chofer } = await cuerpo();
+        const limpio = limpiarChofer(chofer);
+        await actualizar(store, 'choferes', (l) => {
+          const i = l.findIndex((c) => c.id === partes[1]);
+          if (i < 0) throw new ErrorNegocio('Ese chofer ya no existe.', 404);
+          l[i] = { ...l[i], ...limpio };
+        }, () => []);
+        return json({ choferes: await lista() });
+      }
+      if (partes[1] && metodo === 'DELETE') {
+        await actualizar(store, 'choferes', (l) => {
+          const i = l.findIndex((c) => c.id === partes[1]);
+          if (i >= 0) l.splice(i, 1);
+        }, () => []);
+        return json({ choferes: await lista() });
       }
     }
 

@@ -6,6 +6,12 @@ Todo corre en **Netlify**: la página, las funciones del servidor y la base de d
 
 ## Qué hace
 
+- **Inicio**: un tablero con los accesos rápidos (Chascomús → La Plata, La Plata → Chascomús, Nuevo viaje, Viajes de hoy, Pasajeros fijos, Choferes y Horarios). También muestra las salidas del día con su chofer y su estado (pendiente, en viaje o finalizado) y un resumen con la cantidad de pasajeros, salidas, fijos y choferes.
+- **Una pantalla por sentido**: *Chascomús → La Plata* y *La Plata → Chascomús* están en pantallas separadas.
+- **Nuevo viaje**: carga un pasajero eligiendo fecha, sentido y horario. El sistema lo ubica en el primer lugar libre y, si el horario está completo, agrega otro auto. Se puede cargar la vuelta en el mismo paso.
+- **Viajes del día**: muestra las dos sucursales lado a lado, ordenadas por horario, con el chofer, el auto y todos los pasajeros. Se puede imprimir.
+- **Choferes**: guarda nombre, número de móvil, modelo del auto, patente y teléfono. En la planilla se elige qué chofer hace cada salida.
+
 - **Planilla del día**, con el mismo formato que la de papel: arriba *Chascomús → La Plata* y abajo *La Plata → Chascomús*. Cada horario es una franja de media hora (por ejemplo 06:00 a 06:30) con autos de 4 lugares.
   - Por pasajero se anota **nombre, teléfono, sube, baja y observaciones**, y por auto el **número de móvil**.
   - **+ Otro auto** agrega 4 lugares más al horario. Reemplaza lo de "pegar otro renglón".
@@ -16,10 +22,9 @@ Todo corre en **Netlify**: la página, las funciones del servidor y la base de d
   - **Imprimir**: saca la hoja del día en A4 apaisado para el chofer.
 - **Control de cupo**: si las dos telefonistas intentan ocupar el mismo lugar al mismo tiempo, entra una y la otra recibe el aviso "Ese lugar lo acaba de ocupar…". Desde ese aviso puede cargarlo en otro lugar libre, o agregar un auto si el horario se llenó.
 - **Autocompletar**: al escribir el nombre (o el teléfono) aparecen los pasajeros que ya viajaron, con sus direcciones. Si es la vuelta, las direcciones aparecen invertidas.
-- **Pasajeros fijos**: se cargan una sola vez con sentido, horario y días de la semana (opcionalmente con su vuelta), y aparecen solos en la planilla de cada día que viajan.
-  - Si un día no viaja, se lo quita de ese día y el resto de la semana sigue igual.
-  - Se pueden pausar (por ejemplo, en vacaciones).
-  - Los cambios se aplican desde mañana. Para el día de hoy está el botón **Cargar fijos**.
+- **Pasajeros fijos**: cada uno tiene una ficha con su horario semanal, que indica para cada día a qué hora va y a qué hora vuelve. Por ejemplo: lunes ida 06:30 y vuelta 12:30, miércoles solo ida 07:45. Sus viajes se cargan solos en la planilla de cada día, incluido el día de hoy, y la vuelta usa las direcciones al revés.
+  - **Cancelar un viaje por un imprevisto**: desde la ficha se elige la fecha y qué se cancela (la ida, la vuelta o los dos). También se puede cancelar desde la planilla con el botón *Cancelar este viaje*. El viaje sale de la planilla, no se vuelve a cargar y queda anotado en la ficha, desde donde se puede reactivar.
+  - La ficha se puede pausar entera, por ejemplo en vacaciones.
 - **Horarios habituales**: la lista de franjas con la que arranca cada día nuevo. Se edita desde la pestaña *Horarios*, sin tocar código.
 - **Usuario y contraseña** para cada sucursal.
 

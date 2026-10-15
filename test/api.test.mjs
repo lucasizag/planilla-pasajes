@@ -16,6 +16,7 @@ async function login(usuario) {
 const pedir = (cookie, metodo, ruta, cuerpo) =>
   app(new Request(`${BASE}${ruta}`, { method: metodo, headers: { cookie }, body: cuerpo ? JSON.stringify(cuerpo) : undefined }));
 
+const sumar = (f, n) => { const d = new Date(f + 'T12:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
 const manana = (() => { const d = new Date(hoyArgentina() + 'T12:00:00Z'); d.setUTCDate(d.getUTCDate() + 1); return d.toISOString().slice(0, 10); })();
 
 test('login incorrecto y sin sesión', async () => {
@@ -66,29 +67,60 @@ test('no se puede vender dos veces el mismo lugar, aunque carguen a la vez', asy
   assert.equal(ocupados, 4);
 });
 
-test('pasajeros fijos: se cargan solos en los días que corresponden', async () => {
+test('pasajeros fijos: horario por día, ida y vuelta, y cancelaciones', async () => {
   const a = await login('chascomus');
   const dow = new Date(manana + 'T12:00:00Z').getUTCDay();
-  // creo el día de mañana antes de cargar el fijo, para probar la sincronización
+  const otroDow = (dow + 1) % 7;
+  const pasado = sumar(manana, 1);
+  // abro mañana antes de crear el fijo, para probar que se sincroniza
   await pedir(a, 'GET', `/dias/${manana}`);
-  const r = await pedir(a, 'POST', '/fijos', { fijo: { nombre: 'Santiago Olmos', sube: 'Acas', baja: '55 / 8-9', sentido: 'CL', desde: '06:30', dias: [dow] } });
+  const r = await pedir(a, 'POST', '/fijos', {
+    fijo: { nombre: 'Santiago Olmos', sube: 'Acas', baja: '55 / 8-9', sentido: 'CL', horarios: { [dow]: { ida: '06:30', vuelta: '12:30' }, [otroDow]: { ida: '07:45', vuelta: '' } } },
+  });
   assert.equal(r.status, 200);
-  const { dia } = await (await pedir(a, 'GET', `/dias/${manana}`)).json();
-  const p = dia.franjas.flatMap((f) => f.autos.flatMap((x) => x.lugares)).find((x) => x && x.nombre === 'Santiago Olmos');
-  assert.ok(p && p.fijoId, 'el fijo aparece en el día ya abierto');
-  // el día siguiente a mañana (otro día de semana) no lo tiene
-  const otro = new Date(manana + 'T12:00:00Z'); otro.setUTCDate(otro.getUTCDate() + 1);
-  const { dia: d2 } = await (await pedir(a, 'GET', `/dias/${otro.toISOString().slice(0, 10)}`)).json();
-  assert.ok(!d2.franjas.some((f) => f.autos.some((x) => x.lugares.some((q) => q && q.nombre === 'Santiago Olmos'))));
-  // si lo quito un día, "cargar fijos" no lo vuelve a poner
-  await pedir(a, 'POST', `/dias/${manana}`, { op: { tipo: 'quitarPasajero', pasajeroId: p.id } });
+  const { fijo } = await r.json();
+  const buscar = (dia) => dia.franjas.flatMap((f) => f.autos.flatMap((x) => x.lugares.map((p) => p && { ...p, sentido: f.sentido, desde: f.desde }))).filter((p) => p && p.nombre === 'Santiago Olmos');
+  let { dia } = await (await pedir(a, 'GET', `/dias/${manana}`)).json();
+  let tramos = buscar(dia);
+  assert.equal(tramos.length, 2, 'ida y vuelta en el día ya abierto');
+  const vuelta = tramos.find((t) => t.sentido === 'LC');
+  assert.equal(vuelta.desde, '12:30');
+  assert.equal(vuelta.sube, '55 / 8-9');
+  assert.equal(vuelta.baja, 'Acas');
+  // el otro día: solo ida a las 07:45 (horario que no existía: se crea)
+  ({ dia } = await (await pedir(a, 'GET', `/dias/${pasado}`)).json());
+  tramos = buscar(dia);
+  assert.deepEqual(tramos.map((t) => t.desde), ['07:45']);
+
+  // cancelar solo la vuelta de mañana
+  let c = await pedir(a, 'POST', `/fijos/${fijo.id}/cancelar`, { fecha: manana, tramo: 'vuelta' });
+  assert.equal(c.status, 200);
+  ({ dia } = await (await pedir(a, 'GET', `/dias/${manana}`)).json());
+  assert.deepEqual(buscar(dia).map((t) => t.sentido), ['CL']);
+  // "cargar fijos" no la vuelve a poner
   const rc = await (await pedir(a, 'POST', `/dias/${manana}`, { op: { tipo: 'cargarFijos' } })).json();
   assert.equal(rc.resultado.agregados, 0);
-  // al borrar el fijo, desaparece de los días futuros
-  const { fijo } = await r.json();
+  // cancelar también la ida → queda "ambos"
+  c = await (await pedir(a, 'POST', `/fijos/${fijo.id}/cancelar`, { fecha: manana, tramo: 'ida' })).json();
+  assert.equal(c.fijo.cancelaciones.find((x) => x.fecha === manana).tramo, 'ambos');
+  ({ dia } = await (await pedir(a, 'GET', `/dias/${manana}`)).json());
+  assert.equal(buscar(dia).length, 0);
+  // reactivar la ida
+  c = await (await pedir(a, 'POST', `/fijos/${fijo.id}/reactivar`, { fecha: manana, tramo: 'ida' })).json();
+  assert.equal(c.fijo.cancelaciones.find((x) => x.fecha === manana).tramo, 'vuelta');
+  ({ dia } = await (await pedir(a, 'GET', `/dias/${manana}`)).json());
+  assert.deepEqual(buscar(dia).map((t) => t.sentido), ['CL']);
+  // un día que se abre por primera vez respeta las cancelaciones
+  const semana = sumar(manana, 7);
+  await pedir(a, 'POST', `/fijos/${fijo.id}/cancelar`, { fecha: semana, tramo: 'ambos' });
+  ({ dia } = await (await pedir(a, 'GET', `/dias/${semana}`)).json());
+  assert.equal(buscar(dia).length, 0);
+  // no se puede cancelar en el pasado
+  assert.equal((await pedir(a, 'POST', `/fijos/${fijo.id}/cancelar`, { fecha: '2020-01-01', tramo: 'ida' })).status, 400);
+  // al borrar el fijo, desaparece de los días abiertos
   await pedir(a, 'DELETE', `/fijos/${fijo.id}`);
-  const { fijos } = await (await pedir(a, 'GET', '/fijos')).json();
-  assert.equal(fijos.length, 0);
+  ({ dia } = await (await pedir(a, 'GET', `/dias/${pasado}`)).json());
+  assert.equal(buscar(dia).length, 0);
 });
 
 test('operaciones de franjas y autos', async () => {
@@ -105,4 +137,23 @@ test('operaciones de franjas y autos', async () => {
   assert.equal(res.status, 409);
   const bad = await pedir(a, 'POST', F, { op: { tipo: 'agregarFranja', sentido: 'LC', desde: '25:00' } });
   assert.equal(bad.status, 400);
+});
+
+test('choferes y nuevo viaje', async () => {
+  const a = await login('chascomus');
+  const r = await (await pedir(a, 'POST', '/choferes', { chofer: { nombre: 'Juan Pérez', movil: '12', auto: 'Toyota Corolla', patente: 'ab123cd' } })).json();
+  assert.equal(r.chofer.patente, 'AB123CD');
+  const F = '/dias/2026-10-21';
+  // horario inexistente: se crea
+  let v = await (await pedir(a, 'POST', F, { op: { tipo: 'nuevoViaje', sentido: 'CL', desde: '09:15', pasajero: { nombre: 'Ana' } } })).json();
+  const fr = v.dia.franjas.find((f) => f.id === v.resultado.franjaId);
+  assert.equal(fr.desde, '09:15');
+  // se llena y agrega auto solo
+  for (const n of ['B', 'C', 'D', 'E']) v = await (await pedir(a, 'POST', F, { op: { tipo: 'nuevoViaje', sentido: 'CL', desde: '09:15', pasajero: { nombre: n } } })).json();
+  const fr2 = v.dia.franjas.find((f) => f.id === fr.id);
+  assert.equal(fr2.autos.length, 2);
+  v = await (await pedir(a, 'POST', F, { op: { tipo: 'asignarChofer', franjaId: fr.id, autoId: fr2.autos[0].id, choferId: r.chofer.id, choferNombre: 'Juan Pérez' } })).json();
+  assert.equal(v.dia.franjas.find((f) => f.id === fr.id).autos[0].choferId, r.chofer.id);
+  const del = await (await pedir(a, 'DELETE', `/choferes/${r.chofer.id}`)).json();
+  assert.equal(del.choferes.length, 0);
 });

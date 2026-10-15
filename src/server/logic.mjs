@@ -128,7 +128,7 @@ export function limpiarPasajero(datos) {
   return p;
 }
 
-function registrar(dia, usuario, accion) {
+export function registrar(dia, usuario, accion) {
   dia.historial = dia.historial || [];
   dia.historial.unshift({ en: new Date().toISOString(), por: usuario, accion });
   if (dia.historial.length > 150) dia.historial.length = 150;
@@ -139,79 +139,128 @@ function etiquetaFranja(f) {
 }
 
 // ---------- Fijos ----------
+// Un pasajero fijo tiene una "ficha" con su horario semanal:
+//   sentido: sentido de la IDA ('CL' sale de Chascomús, 'LC' sale de La Plata)
+//   sube / baja: direcciones de la ida (la vuelta usa las mismas, al revés)
+//   horarios: { 1: { ida: '06:30', vuelta: '12:30' }, 3: { ida: '07:30', vuelta: '' } }  (0 = domingo)
+//   cancelaciones: [{ fecha: '2026-10-20', tramo: 'ida' | 'vuelta' | 'ambos' }]
+// En la planilla, cada tramo se identifica con fijoId = '<id>:ida' o '<id>:vuelta'.
 
-export function fijoAplicaA(fijo, fecha) {
-  return fijo.activo !== false && Array.isArray(fijo.dias) && fijo.dias.includes(diaDeSemana(fecha));
+const OPUESTO = { CL: 'LC', LC: 'CL' };
+
+// Convierte fichas viejas (un solo horario + lista de días) al formato nuevo.
+export function normalizarFijo(f) {
+  if (!f || f.horarios) return f;
+  const horarios = {};
+  for (const d of f.dias || []) horarios[d] = { ida: f.desde || '', vuelta: '' };
+  return { ...f, horarios, cancelaciones: f.cancelaciones || [] };
 }
 
-function fijoPresente(dia, fijoId) {
-  return dia.franjas.some((f) => f.autos.some((a) => a.lugares.some((p) => p && p.fijoId === fijoId)));
+export function tramosDelDia(fijo, fecha) {
+  fijo = normalizarFijo(fijo);
+  if (!fijo || fijo.activo === false) return [];
+  const h = fijo.horarios?.[diaDeSemana(fecha)];
+  if (!h) return [];
+  const canc = (fijo.cancelaciones || []).filter((c) => c.fecha === fecha).map((c) => c.tramo);
+  const res = [];
+  if (h.ida && !canc.includes('ida') && !canc.includes('ambos')) {
+    res.push({ clave: `${fijo.id}:ida`, tipo: 'ida', sentido: fijo.sentido, desde: h.ida, sube: fijo.sube || '', baja: fijo.baja || '' });
+  }
+  if (h.vuelta && !canc.includes('vuelta') && !canc.includes('ambos')) {
+    res.push({ clave: `${fijo.id}:vuelta`, tipo: 'vuelta', sentido: OPUESTO[fijo.sentido], desde: h.vuelta, sube: fijo.baja || '', baja: fijo.sube || '' });
+  }
+  return res;
 }
 
-// Agrega a la planilla los fijos que corresponden a ese día y todavía no están.
-// No vuelve a poner los que la telefonista sacó a mano ese día (fijosQuitados).
+export function esDelFijo(p, fijoId) {
+  return !!p && !!p.fijoId && (p.fijoId === fijoId || p.fijoId.startsWith(fijoId + ':'));
+}
+
+function clavePresente(dia, clave) {
+  const [id, tipo] = clave.split(':');
+  return dia.franjas.some((f) => f.autos.some((a) => a.lugares.some((p) => p && (p.fijoId === clave || (tipo === 'ida' && p.fijoId === id)))));
+}
+
+// Agrega a la planilla los tramos fijos que corresponden a ese día y todavía no están.
+// No vuelve a poner los que la telefonista sacó a mano ese día (fijosQuitados) ni los cancelados.
 export function aplicarFijos(dia, fijos, usuario) {
   let agregados = 0;
   const quitados = new Set(dia.fijosQuitados || []);
   for (const fijo of fijos || []) {
-    if (!fijoAplicaA(fijo, dia.fecha) || quitados.has(fijo.id) || fijoPresente(dia, fijo.id)) continue;
-    let franja = dia.franjas.find((f) => f.sentido === fijo.sentido && f.desde === fijo.desde);
-    if (!franja) {
-      franja = crearFranja(fijo.sentido, fijo.desde, fijo.hasta);
-      dia.franjas.push(franja);
-      ordenarFranjas(dia);
+    for (const t of tramosDelDia(fijo, dia.fecha)) {
+      if (quitados.has(t.clave) || quitados.has(fijo.id) || clavePresente(dia, t.clave)) continue;
+      let franja = dia.franjas.find((f) => f.sentido === t.sentido && f.desde === t.desde);
+      if (!franja) {
+        franja = crearFranja(t.sentido, t.desde);
+        dia.franjas.push(franja);
+        ordenarFranjas(dia);
+      }
+      let libre = primerLugarLibre(franja);
+      if (!libre) {
+        franja.autos.push(autoVacio());
+        libre = primerLugarLibre(franja);
+      }
+      libre.auto.lugares[libre.lugar] = {
+        id: nuevoId(),
+        nombre: fijo.nombre,
+        telefono: fijo.telefono || '',
+        sube: t.sube,
+        baja: t.baja,
+        obs: fijo.obs || '',
+        fijoId: t.clave,
+        por: usuario,
+        en: new Date().toISOString(),
+      };
+      agregados++;
     }
-    let libre = primerLugarLibre(franja);
-    if (!libre) {
-      franja.autos.push(autoVacio());
-      libre = primerLugarLibre(franja);
-    }
-    libre.auto.lugares[libre.lugar] = {
-      id: nuevoId(),
-      nombre: fijo.nombre,
-      telefono: fijo.telefono || '',
-      sube: fijo.sube || '',
-      baja: fijo.baja || '',
-      obs: fijo.obs || '',
-      fijoId: fijo.id,
-      por: usuario,
-      en: new Date().toISOString(),
-    };
-    agregados++;
   }
-  if (agregados && usuario !== 'sistema') registrar(dia, usuario, `cargó ${agregados} pasajero(s) fijo(s)`);
+  if (agregados && usuario !== 'sistema') registrar(dia, usuario, `cargó ${agregados} viaje(s) de pasajeros fijos`);
   return agregados;
 }
 
-// Saca del día las apariciones de un fijo que nadie tocó a mano (para resincronizar).
-export function quitarFijoNoEditado(dia, fijoId) {
+// Saca del día los tramos de un fijo. Con soloNoEditados, deja los que una telefonista modificó a mano.
+export function quitarTramosFijo(dia, fijoId, { soloNoEditados = false, tramo = null } = {}) {
   let quitados = 0;
   for (const f of dia.franjas) {
     for (const a of f.autos) {
       a.lugares = a.lugares.map((p) => {
-        if (p && p.fijoId === fijoId && !p.editado) {
-          quitados++;
-          return null;
-        }
-        return p;
+        if (!esDelFijo(p, fijoId)) return p;
+        if (soloNoEditados && p.editado) return p;
+        const tipo = p.fijoId.includes(':') ? p.fijoId.split(':')[1] : 'ida';
+        if (tramo && tramo !== 'ambos' && tramo !== tipo) return p;
+        quitados++;
+        return null;
       });
     }
   }
   return quitados;
 }
 
-export function fijoPresenteEditado(dia, fijoId) {
-  return dia.franjas.some((f) => f.autos.some((a) => a.lugares.some((p) => p && p.fijoId === fijoId && p.editado)));
+// Compatibilidad con el nombre anterior.
+export function quitarFijoNoEditado(dia, fijoId) {
+  return quitarTramosFijo(dia, fijoId, { soloNoEditados: true });
 }
 
 export function limpiarFijo(datos) {
   const base = limpiarPasajero(datos);
-  if (!SENTIDOS[datos?.sentido]) throw new ErrorNegocio('Elegí el sentido del viaje.', 400);
-  const desde = validarHora(datos.desde);
-  const hasta = datos.hasta ? validarHora(datos.hasta) : sumarMinutos(desde, 30);
-  const dias = [...new Set((datos.dias || []).map(Number).filter((d) => d >= 0 && d <= 6))].sort();
-  if (!dias.length) throw new ErrorNegocio('Marcá al menos un día de la semana.', 400);
-  return { ...base, sentido: datos.sentido, desde, hasta, dias, activo: datos.activo !== false };
+  if (!SENTIDOS[datos?.sentido]) throw new ErrorNegocio('Elegí desde dónde sale el pasajero.', 400);
+  const horarios = {};
+  for (const [d, h] of Object.entries(datos.horarios || {})) {
+    const dia = Number(d);
+    if (!(dia >= 0 && dia <= 6) || !h) continue;
+    const ida = h.ida ? validarHora(h.ida) : '';
+    const vuelta = h.vuelta ? validarHora(h.vuelta) : '';
+    if (ida || vuelta) horarios[dia] = { ida, vuelta };
+  }
+  if (!Object.keys(horarios).length) throw new ErrorNegocio('Marcá al menos un día con horario de ida o de vuelta.', 400);
+  return { ...base, sentido: datos.sentido, horarios, activo: datos.activo !== false };
+}
+
+export function limpiarCancelacion(datos, hoy) {
+  const fecha = validarFecha(datos?.fecha);
+  if (hoy && fecha < hoy) throw new ErrorNegocio('No se puede cancelar un viaje de un día que ya pasó.', 400);
+  const tramo = ['ida', 'vuelta', 'ambos'].includes(datos?.tramo) ? datos.tramo : 'ambos';
+  return { fecha, tramo };
 }
 
 // ---------- Operaciones sobre el día ----------
@@ -325,6 +374,34 @@ export function aplicarOperacion(dia, op, usuario, fijos) {
       registrar(dia, usuario, `borró el horario ${etiquetaFranja(franja)}`);
       return {};
     }
+    case 'asignarChofer': {
+      const franja = buscarFranja(dia, op.franjaId);
+      const auto = buscarAuto(franja, op.autoId);
+      auto.choferId = typeof op.choferId === 'string' && op.choferId ? op.choferId : null;
+      const nombre = texto(op.choferNombre, 80);
+      registrar(dia, usuario, auto.choferId ? `asignó a ${nombre || 'un chofer'} en ${etiquetaFranja(franja)}` : `sacó el chofer de ${etiquetaFranja(franja)}`);
+      return {};
+    }
+    case 'nuevoViaje': {
+      if (!SENTIDOS[op.sentido]) throw new ErrorNegocio('Elegí el sentido del viaje.', 400);
+      const desde = validarHora(op.desde);
+      const datos = limpiarPasajero(op.pasajero);
+      let franja = dia.franjas.find((f) => f.sentido === op.sentido && f.desde === desde);
+      if (!franja) {
+        franja = crearFranja(op.sentido, desde, op.hasta ? validarHora(op.hasta) : null);
+        dia.franjas.push(franja);
+        ordenarFranjas(dia);
+      }
+      let libre = primerLugarLibre(franja);
+      if (!libre) {
+        franja.autos.push(autoVacio());
+        libre = primerLugarLibre(franja);
+      }
+      const pasajero = { id: nuevoId(), ...datos, fijoId: null, por: usuario, en: new Date().toISOString() };
+      libre.auto.lugares[libre.lugar] = pasajero;
+      registrar(dia, usuario, `cargó a ${datos.nombre} en ${etiquetaFranja(franja)}`);
+      return { pasajero, franjaId: franja.id };
+    }
     case 'cargarFijos': {
       if (op.incluirQuitados) dia.fijosQuitados = [];
       const agregados = aplicarFijos(dia, fijos, usuario);
@@ -333,6 +410,21 @@ export function aplicarOperacion(dia, op, usuario, fijos) {
     default:
       throw new ErrorNegocio('Operación desconocida.', 400);
   }
+}
+
+// ---------- Choferes ----------
+
+export function limpiarChofer(datos) {
+  const c = {
+    nombre: texto(datos?.nombre, 80),
+    telefono: texto(datos?.telefono, 40),
+    movil: texto(datos?.movil, 20),
+    auto: texto(datos?.auto, 60),
+    patente: texto(datos?.patente, 15).toUpperCase(),
+    activo: datos?.activo !== false,
+  };
+  if (!c.nombre) throw new ErrorNegocio('Falta el nombre del chofer.', 400);
+  return c;
 }
 
 // ---------- Agenda de pasajeros (para autocompletar) ----------
