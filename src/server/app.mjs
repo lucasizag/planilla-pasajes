@@ -172,8 +172,11 @@ export function crearApp({ store, entorno }) {
     try {
       if (partes[0] === 'login' && req.method === 'POST') {
         const usuarios = leerUsuarios(env('USUARIOS'));
-        if (!secreto || usuarios.size === 0) {
-          return json({ error: 'El sistema todavía no tiene usuarios configurados (faltan USUARIOS y SESSION_SECRET).' }, 500);
+        const faltan = [];
+        if (usuarios.size === 0) faltan.push(env('USUARIOS') ? 'USUARIOS tiene un formato inválido' : 'falta USUARIOS');
+        if (!secreto) faltan.push('falta SESSION_SECRET');
+        if (faltan.length) {
+          return json({ error: `El sistema todavía no está configurado: ${faltan.join(' y ')}. Revisá las variables en Netlify y volvé a desplegar.` }, 500);
         }
         let datos = {};
         try {
