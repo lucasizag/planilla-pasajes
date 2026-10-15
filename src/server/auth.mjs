@@ -11,7 +11,15 @@ export function hashearClave(clave) {
 }
 
 export function verificarClave(clave, guardado) {
-  const [tipo, sal, hash] = String(guardado || '').split('$');
+  guardado = String(guardado || '');
+  if (!guardado.startsWith('scrypt$')) {
+    // Contraseña escrita tal cual en la variable (más simple de configurar).
+    if (!guardado) return false;
+    const a = createHmac('sha256', 'cmp').update(String(clave)).digest();
+    const b = createHmac('sha256', 'cmp').update(guardado).digest();
+    return timingSafeEqual(a, b);
+  }
+  const [tipo, sal, hash] = guardado.split('$');
   if (tipo !== 'scrypt' || !sal || !hash) return false;
   const calculado = scryptSync(String(clave), sal, 32);
   const esperado = Buffer.from(hash, 'hex');
@@ -20,10 +28,14 @@ export function verificarClave(clave, guardado) {
 
 export function leerUsuarios(texto) {
   const usuarios = new Map();
-  for (const parte of String(texto || '').split(',')) {
-    const i = parte.indexOf(':');
+  // Acepta separadores coma, punto y coma o salto de línea; "usuario:clave" o "usuario=clave"; con o sin comillas.
+  for (let parte of String(texto || '').split(/[,;\n\r]+/)) {
+    parte = parte.trim().replace(/^["'`]+|["'`]+$/g, '').trim();
+    const i = parte.search(/[:=]/);
     if (i <= 0) continue;
-    usuarios.set(parte.slice(0, i).trim().toLowerCase(), parte.slice(i + 1).trim());
+    const usuario = parte.slice(0, i).trim().toLowerCase();
+    const clave = parte.slice(i + 1).trim();
+    if (usuario && clave) usuarios.set(usuario, clave);
   }
   return usuarios;
 }
