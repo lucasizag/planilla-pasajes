@@ -378,6 +378,7 @@ export function aplicarOperacion(dia, op, usuario, fijos) {
       const franja = buscarFranja(dia, op.franjaId);
       const auto = buscarAuto(franja, op.autoId);
       auto.choferId = typeof op.choferId === 'string' && op.choferId ? op.choferId : null;
+      auto.movil = ''; // borra el texto libre de la versión anterior
       const nombre = texto(op.choferNombre, 80);
       registrar(dia, usuario, auto.choferId ? `asignó a ${nombre || 'un chofer'} en ${etiquetaFranja(franja)}` : `sacó el chofer de ${etiquetaFranja(franja)}`);
       return {};

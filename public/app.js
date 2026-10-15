@@ -392,7 +392,7 @@ function textoChofer(auto) {
   const c = auto.choferId ? choferPorId(auto.choferId) : null;
   if (c) return { ok: true, texto: `${c.nombre}${c.movil ? ` · Móvil ${c.movil}` : ''}`, detalle: [c.auto, c.patente].filter(Boolean).join(' · '), telefono: c.telefono };
   if (auto.choferId) return { ok: true, texto: 'Chofer borrado de la lista', detalle: '' };
-  if (auto.movil) return { ok: true, texto: `Móvil ${auto.movil}`, detalle: '' };
+  if (auto.movil) return { ok: true, texto: auto.movil, detalle: '' };
   return { ok: false, texto: 'Sin chofer asignado', detalle: '' };
 }
 
@@ -569,7 +569,8 @@ function vistaFranja(f) {
         <b>Auto ${i + 1}</b>
         <select data-chofer data-franja="${f.id}" data-auto="${a.id}" aria-label="Chofer del auto ${i + 1}">${opcionesChofer(a.choferId)}</select>
         ${f.autos.length > 1 && !a.lugares.some(Boolean) ? `<button class="btn-texto" data-accion="quitar-auto" data-franja="${f.id}" data-auto="${a.id}">Quitar</button>` : ''}
-        ${ch.detalle || (!a.choferId && a.movil) ? `<span class="info-auto">${esc(ch.detalle || `Móvil ${a.movil}`)}</span>` : ''}
+        ${ch.detalle ? `<span class="info-auto">${esc(ch.detalle)}</span>` : ''}
+        ${!a.choferId && a.movil ? `<span class="info-auto">Anotado antes: ${esc(a.movil)} <button class="btn-texto no-imprimir" data-accion="borrar-movil" data-franja="${f.id}" data-auto="${a.id}" title="Borrar este texto" aria-label="Borrar texto anterior">✕</button></span>` : ''}
       </div>
       ${a.lugares.map((p, j) => vistaLugar(f, a, j, p)).join('')}`;
       })
@@ -1620,6 +1621,9 @@ document.addEventListener('click', async (ev) => {
       case 'agregar-auto':
         el.disabled = true;
         await operar({ tipo: 'agregarAuto', franjaId: el.dataset.franja }, { mensaje: 'Auto agregado (4 lugares más)' });
+        break;
+      case 'borrar-movil':
+        await operar({ tipo: 'asignarChofer', franjaId: el.dataset.franja, autoId: el.dataset.auto, choferId: null }, { mensaje: 'Texto anterior borrado' });
         break;
       case 'quitar-auto':
         await operar({ tipo: 'quitarAuto', franjaId: el.dataset.franja, autoId: el.dataset.auto }, { mensaje: 'Auto quitado' });
