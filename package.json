@@ -1,0 +1,16 @@
+{
+  "name": "planilla-pasajes",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Planilla compartida de pasajes Chascomús ⇄ La Plata",
+  "scripts": {
+    "dev": "node dev-server.mjs",
+    "test": "node --test test/*.test.mjs",
+    "clave": "node scripts/clave.mjs"
+  },
+  "dependencies": {
+    "@netlify/blobs": "^11.1.4"
+  },
+  "engines": { "node": ">=20" }
+}
