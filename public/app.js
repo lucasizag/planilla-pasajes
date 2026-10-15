@@ -6,7 +6,9 @@ const CORTO = { CL: 'CH → LP', LC: 'LP → CH' };
 const DIAS_LETRA = ['D', 'L', 'M', 'X', 'J', 'V', 'S'];
 const DIAS_NOMBRE = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
 const ORDEN_SEMANA = [1, 2, 3, 4, 5, 6, 0];
-const CADA_CUANTO = 4000; // ms entre actualizaciones automáticas
+const CADA_CUANTO = 15000; // ms entre actualizaciones mientras se usa la pantalla
+const CADA_CUANTO_INACTIVO = 60000; // ms entre actualizaciones si nadie toca nada
+const INACTIVO = 3 * 60000; // a partir de cuántos ms sin actividad se considera inactivo
 
 const E = {
   usuario: null,
@@ -242,13 +244,37 @@ function renderSeguro() {
   render();
 }
 
-setInterval(() => {
-  if (!document.hidden && E.usuario) traerDia();
-}, CADA_CUANTO);
-setInterval(() => E.usuario && cargarAgenda(), 60000);
-document.addEventListener('visibilitychange', () => {
-  if (!document.hidden && E.usuario) traerDia();
-});
+// Actualización automática, pensada para gastar pocos créditos de Netlify:
+// - cada 15 s mientras alguien está usando la pantalla,
+// - cada 60 s si nadie toca nada hace más de 3 minutos,
+// - nada si la pestaña está minimizada u oculta.
+// Al volver a la pestaña o mover el mouse después de un rato, se actualiza al instante.
+// (El control de cupo lo hace el servidor al guardar, así que no depende de esto.)
+let ultimaActividad = Date.now();
+let ultimaConsulta = 0;
+function consultarSiToca(forzar = false) {
+  if (!E.usuario || document.hidden || E.vista !== 'planilla') return;
+  const inactivo = Date.now() - ultimaActividad > INACTIVO;
+  const intervalo = inactivo ? CADA_CUANTO_INACTIVO : CADA_CUANTO;
+  if (forzar || Date.now() - ultimaConsulta >= intervalo) {
+    ultimaConsulta = Date.now();
+    traerDia();
+  }
+}
+setInterval(consultarSiToca, 5000);
+for (const ev of ['mousemove', 'keydown', 'mousedown', 'touchstart', 'scroll']) {
+  window.addEventListener(
+    ev,
+    () => {
+      const veniaInactivo = Date.now() - ultimaActividad > INACTIVO;
+      ultimaActividad = Date.now();
+      if (veniaInactivo) consultarSiToca(true);
+    },
+    { passive: true },
+  );
+}
+document.addEventListener('visibilitychange', () => consultarSiToca(true));
+setInterval(() => E.usuario && !document.hidden && cargarAgenda(), 5 * 60000);
 
 // ---------- Pantalla ----------
 
