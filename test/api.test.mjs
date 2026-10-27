@@ -157,3 +157,19 @@ test('choferes y nuevo viaje', async () => {
   const del = await (await pedir(a, 'DELETE', `/choferes/${r.chofer.id}`)).json();
   assert.equal(del.choferes.length, 0);
 });
+
+test('sesión por token cuando el navegador no guarda la cookie, y motivo del 401', async () => {
+  const r = await app(new Request(`${BASE}/login`, { method: 'POST', body: JSON.stringify({ usuario: 'laplata', clave: 'x' }) }));
+  const { token } = await r.json();
+  assert.ok(token);
+  const conToken = await app(new Request(`${BASE}/yo`, { headers: { authorization: `Bearer ${token}` } }));
+  assert.equal(conToken.status, 200);
+  const sin = await (await app(new Request(`${BASE}/yo`))).json();
+  assert.equal(sin.motivo, 'sin-sesion');
+  const mala = await (await app(new Request(`${BASE}/yo`, { headers: { authorization: 'Bearer abc.def' } }))).json();
+  assert.equal(mala.motivo, 'firma');
+  // dos sesiones del mismo usuario conviven
+  const r2 = await app(new Request(`${BASE}/login`, { method: 'POST', body: JSON.stringify({ usuario: 'laplata', clave: 'x' }) }));
+  const t2 = (await r2.json()).token;
+  for (const t of [token, t2]) assert.equal((await app(new Request(`${BASE}/yo`, { headers: { authorization: `Bearer ${t}` } }))).status, 200);
+});

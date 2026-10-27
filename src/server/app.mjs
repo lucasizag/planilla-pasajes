@@ -18,7 +18,7 @@ import {
   SENTIDOS,
 } from './logic.mjs';
 import { actualizar, leer, leerOCrear } from './datos.mjs';
-import { cookieBorrar, cookieSesion, crearSesion, leerCookie, leerSesion, leerUsuarios, verificarClave } from './auth.mjs';
+import { cookieBorrar, cookieSesion, crearSesion, leerCookie, leerUsuarios, revisarSesion, verificarClave } from './auth.mjs';
 
 export function hoyArgentina(fecha = new Date()) {
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' }).format(fecha);
@@ -269,16 +269,26 @@ export function crearApp({ store, entorno }) {
           await espera(800);
           return json({ error: 'Usuario o contraseña incorrectos.' }, 401);
         }
-        return json({ usuario: nombre }, 200, { 'set-cookie': cookieSesion(crearSesion(nombre, secreto), segura) });
+        // La sesión va en una cookie y también se devuelve como token, para los navegadores
+        // que no guardan cookies (por ejemplo el navegador interno de WhatsApp o Instagram).
+        const token = crearSesion(nombre, secreto);
+        return json({ usuario: nombre, token }, 200, { 'set-cookie': cookieSesion(token, segura) });
       }
       if (partes[0] === 'logout') {
         return json({ ok: true }, 200, { 'set-cookie': cookieBorrar(segura) });
       }
 
-      const usuario = leerSesion(leerCookie(req, 'sesion'), secreto);
-      if (!usuario || !leerUsuarios(env('USUARIOS')).has(usuario)) {
-        return json({ error: 'Tenés que iniciar sesión.' }, 401);
+      // Primero la cookie; si no sirve, el token del encabezado Authorization.
+      const porCookie = revisarSesion(leerCookie(req, 'sesion'), secreto);
+      const bearer = (req.headers.get('authorization') || '').replace(/^Bearer\s+/i, '').trim();
+      const sesion = porCookie.usuario ? porCookie : bearer ? revisarSesion(bearer, secreto) : porCookie;
+      if (!sesion.usuario) {
+        return json({ error: 'Tenés que iniciar sesión.', motivo: sesion.motivo }, 401);
       }
+      if (!leerUsuarios(env('USUARIOS')).has(sesion.usuario)) {
+        return json({ error: 'Tenés que iniciar sesión.', motivo: 'usuario-inexistente' }, 401);
+      }
+      const usuario = sesion.usuario;
 
       // Protección básica contra pedidos desde otros sitios.
       if (req.method !== 'GET') {

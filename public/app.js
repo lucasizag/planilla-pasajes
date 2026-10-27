@@ -107,12 +107,35 @@ function aviso(texto, tipo = '') {
   setTimeout(() => el.remove(), tipo === 'error' ? 6000 : 3000);
 }
 
+// Token de sesión de respaldo, para navegadores que no guardan la cookie
+// (por ejemplo el navegador interno de WhatsApp). Vive en memoria y, si se puede, en localStorage.
+let tokenSesion = null;
+try {
+  tokenSesion = localStorage.getItem('sesion');
+} catch {}
+function guardarToken(t) {
+  tokenSesion = t || null;
+  try {
+    if (t) localStorage.setItem('sesion', t);
+    else localStorage.removeItem('sesion');
+  } catch {}
+}
+
+const MOTIVOS = {
+  'sin-sesion': 'el navegador no envió la sesión',
+  firma: 'la sesión no es válida (cambió la configuración del sistema)',
+  vencida: 'la sesión venció',
+  formato: 'la sesión está dañada',
+  'usuario-inexistente': 'el usuario ya no existe',
+  'sin-secreto': 'falta configurar SESSION_SECRET',
+};
+
 async function api(metodo, ruta, cuerpo, headers = {}) {
   let r;
   try {
     r = await fetch('/api' + ruta, {
       method: metodo,
-      headers: { 'content-type': 'application/json', ...headers },
+      headers: { 'content-type': 'application/json', ...(tokenSesion ? { authorization: `Bearer ${tokenSesion}` } : {}), ...headers },
       body: cuerpo ? JSON.stringify(cuerpo) : undefined,
       cache: 'no-store',
       credentials: 'same-origin',
@@ -125,8 +148,12 @@ async function api(metodo, ruta, cuerpo, headers = {}) {
   if (r.status === 304) return { sinCambios: true };
   const datos = await r.json().catch(() => ({}));
   if (r.status === 401 && ruta !== '/login') {
+    const yaLogueado = !!E.usuario;
     E.usuario = null;
-    mostrarLogin('Tu sesión terminó. Volvé a entrar.');
+    guardarToken(null);
+    // Al abrir la página sin sesión, se muestra el login sin mensaje de error.
+    if (ruta === '/yo' && !yaLogueado) mostrarLogin();
+    else mostrarLogin(`Tu sesión terminó. Volvé a entrar.${datos.motivo ? ` (Motivo: ${MOTIVOS[datos.motivo] || datos.motivo})` : ''}`);
     throw Object.assign(new Error('Sesión vencida'), { status: 401 });
   }
   if (!r.ok) throw Object.assign(new Error(datos.error || 'Algo salió mal.'), { status: r.status });
@@ -207,7 +234,8 @@ function mostrarLogin(mensaje = '') {
     boton.disabled = true;
     boton.textContent = 'Entrando…';
     try {
-      await api('POST', '/login', { usuario: f.get('usuario'), clave: f.get('clave') });
+      const r = await api('POST', '/login', { usuario: f.get('usuario'), clave: f.get('clave') });
+      guardarToken(r.token);
       await iniciar();
     } catch (e) {
       mostrarLogin(e.message);
@@ -1608,7 +1636,8 @@ document.addEventListener('click', async (ev) => {
         cerrarModal();
         break;
       case 'salir':
-        await api('POST', '/logout');
+        await api('POST', '/logout').catch(() => {});
+        guardarToken(null);
         E.usuario = null;
         mostrarLogin();
         break;

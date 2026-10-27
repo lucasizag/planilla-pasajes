@@ -51,6 +51,22 @@ export function crearSesion(usuario, secreto) {
   return `${payload}.${firmar(payload, secreto)}`;
 }
 
+// Igual que leerSesion, pero explica por qué falla (para diagnosticar).
+export function revisarSesion(token, secreto) {
+  if (!secreto) return { motivo: 'sin-secreto' };
+  if (!token) return { motivo: 'sin-sesion' };
+  const [payload, firma] = token.split('.');
+  if (!payload || !firma) return { motivo: 'formato' };
+  const esperada = firmar(payload, secreto);
+  if (esperada.length !== firma.length || !timingSafeEqual(Buffer.from(esperada), Buffer.from(firma))) return { motivo: 'firma' };
+  try {
+    const { u, exp } = JSON.parse(Buffer.from(payload, 'base64url').toString());
+    return exp > Date.now() ? { usuario: u } : { motivo: 'vencida' };
+  } catch {
+    return { motivo: 'formato' };
+  }
+}
+
 export function leerSesion(token, secreto) {
   if (!token || !secreto) return null;
   const [payload, firma] = token.split('.');
