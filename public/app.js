@@ -1,6 +1,9 @@
 // Remisería · Chascomús ⇄ La Plata
 // Sin frameworks: todo el estado vive en `E` y la pantalla se vuelve a dibujar con render().
 
+// Versión de la página. Tiene que coincidir con VERSION en src/server/app.mjs.
+const VERSION = '7';
+
 const SENTIDOS = { CL: 'Chascomús → La Plata', LC: 'La Plata → Chascomús' };
 const CORTO = { CL: 'CH → LP', LC: 'LP → CH' };
 const DIAS_LETRA = ['D', 'L', 'M', 'X', 'J', 'V', 'S'];
@@ -145,6 +148,7 @@ async function api(metodo, ruta, cuerpo, headers = {}, reintento = false) {
     throw Object.assign(new Error('Sin conexión a internet. Revisá la conexión y probá de nuevo.'), { status: 0 });
   }
   marcarConexion(true);
+  revisarVersion(r.headers.get('x-version'));
   if (r.status === 304) return { sinCambios: true };
   const datos = await r.json().catch(() => ({}));
   if (r.status === 401 && ruta !== '/login' && !reintento && (tokenSesion || E.usuario)) {
@@ -164,6 +168,17 @@ async function api(metodo, ruta, cuerpo, headers = {}, reintento = false) {
   }
   if (!r.ok) throw Object.assign(new Error(datos.error || 'Algo salió mal.'), { status: r.status });
   return datos;
+}
+
+// Si el servidor se actualizó y esta pestaña tiene la página vieja, se recarga sola (una vez).
+function revisarVersion(v) {
+  if (!v || v === VERSION) return;
+  let yaRecargo = false;
+  try {
+    yaRecargo = sessionStorage.getItem('recargaVersion') === v;
+    sessionStorage.setItem('recargaVersion', v);
+  } catch {}
+  if (!yaRecargo) location.reload();
 }
 
 function marcarConexion(ok) {
@@ -394,7 +409,7 @@ function render() {
       ${menu.map(([k, href, txt]) => `<a href="${href}" ${k === actual ? 'aria-current="page"' : ''}>${txt}</a>`).join('')}
     </nav>
     <main class="contenido">${vistas[E.vista]()}</main>
-    <footer class="pie">Remisería · Chascomús ⇄ La Plata</footer>`;
+    <footer class="pie">Remisería · Chascomús ⇄ La Plata · versión ${VERSION}</footer>`;
   pintarEstado();
   window.scrollTo(0, scroll);
   E.renderPendiente = false;

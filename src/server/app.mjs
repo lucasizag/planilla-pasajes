@@ -21,6 +21,9 @@ import { actualizar, leer, leerOCrear } from './datos.mjs';
 import { createHash, randomBytes } from 'node:crypto';
 import { cookieBorrar, cookieSesion, crearSesion, leerCookie, leerUsuarios, revisarSesion, verificarClave } from './auth.mjs';
 
+// Versión del sistema. Tiene que coincidir con VERSION en public/app.js.
+export const VERSION = '7';
+
 export function hoyArgentina(fecha = new Date()) {
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' }).format(fecha);
 }
@@ -28,7 +31,7 @@ export function hoyArgentina(fecha = new Date()) {
 function json(cuerpo, status = 200, headers = {}) {
   return new Response(JSON.stringify(cuerpo), {
     status,
-    headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', ...headers },
+    headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'x-version': VERSION, ...headers },
   });
 }
 
@@ -91,7 +94,7 @@ export function crearApp({ store, entorno }) {
       if (metodo === 'GET') {
         const { datos, etag } = await leerOCrear(store, clave, crearDiaNuevo(fecha));
         if (etag && req.headers.get('if-none-match') === etag) {
-          return new Response(null, { status: 304, headers: { etag, 'cache-control': 'no-store' } });
+          return new Response(null, { status: 304, headers: { etag, 'cache-control': 'no-store', 'x-version': VERSION } });
         }
         return json({ dia: datos, etag }, 200, etag ? { etag } : {});
       }
