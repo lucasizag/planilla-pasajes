@@ -1,8 +1,8 @@
-// Remisería · Chascomús ⇄ La Plata
+// Otero Viajes · Chascomús ⇄ La Plata
 // Sin frameworks: todo el estado vive en `E` y la pantalla se vuelve a dibujar con render().
 
 // Versión de la página. Tiene que coincidir con VERSION en src/server/app.mjs.
-const VERSION = '8';
+const VERSION = '9';
 
 const SENTIDOS = { CL: 'Chascomús → La Plata', LC: 'La Plata → Chascomús' };
 const CORTO = { CL: 'CH → LP', LC: 'LP → CH' };
@@ -155,11 +155,13 @@ async function sesionSigueValida() {
   }
 }
 
-async function api(metodo, ruta, cuerpo, headers = {}, reintento = false) {
+async function api(metodo, ruta, cuerpo, headers = {}, reintento = false, confirmado = false) {
   const generacion = generacionSesion;
+  // Marca única en cada lectura, para que ningún intermediario (antivirus, proxy) devuelva una respuesta vieja.
+  const url = '/api' + ruta + (metodo === 'GET' ? `${ruta.includes('?') ? '&' : '?'}_=${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}` : '');
   let r;
   try {
-    r = await fetch('/api' + ruta, {
+    r = await fetch(url, {
       method: metodo,
       headers: { 'content-type': 'application/json', ...(tokenSesion ? { authorization: `Bearer ${tokenSesion}` } : {}), ...headers },
       body: cuerpo ? JSON.stringify(cuerpo) : undefined,
@@ -177,15 +179,21 @@ async function api(metodo, ruta, cuerpo, headers = {}, reintento = false) {
   if (r.status === 401 && ruta !== '/login' && !reintento && (tokenSesion || E.usuario)) {
     // Un 401 suelto puede ser pasajero: se reintenta una vez antes de cerrar la sesión.
     await new Promise((res) => setTimeout(res, 800));
-    return api(metodo, ruta, cuerpo, headers, true);
+    return api(metodo, ruta, cuerpo, headers, true, confirmado);
   }
   if (r.status === 401 && ruta !== '/login') {
     if (!E.usuario && $('#form-login')) throw Object.assign(new Error('Sesión vencida'), { status: 401 });
     // Respuesta vieja de una sesión anterior: se ignora.
     if (generacion !== generacionSesion) throw Object.assign(new Error('Sesión anterior'), { status: 401, ignorar: true });
     // Antes de sacar al usuario, se confirma que la sesión de verdad no sirve.
+    console.warn('[sesión] pedido rechazado', ruta, datos.motivo || '', datos.instancia || '');
     if (ruta !== '/yo' && (await sesionSigueValida())) {
-      throw Object.assign(new Error('No se pudo completar. Probá de nuevo.'), { status: 503 });
+      // La sesión sirve: fue un rechazo suelto. Se reintenta una vez más antes de rendirse.
+      if (!confirmado) {
+        await new Promise((res) => setTimeout(res, 600));
+        return api(metodo, ruta, cuerpo, headers, true, true);
+      }
+      throw Object.assign(new Error('No se pudo completar. Probá de nuevo.'), { status: 503, silencioso: true });
     }
     if (generacion !== generacionSesion) throw Object.assign(new Error('Sesión anterior'), { status: 401, ignorar: true });
     const yaLogueado = !!E.usuario;
@@ -270,7 +278,7 @@ function mostrarLogin(mensaje = '') {
   app.innerHTML = `
     <div class="login">
       <form id="form-login" autocomplete="on">
-        <div class="logo-login">${ICONO.pin}<div><h1>Remisería</h1><p>Chascomús ⇄ La Plata</p></div></div>
+        <div class="logo-login">${ICONO.pin}<div><h1>Otero Viajes</h1><p>Chascomús ⇄ La Plata</p></div></div>
         ${mensaje ? `<div class="error-form">${esc(mensaje)}</div>` : ''}
         <label class="campo"><span>Usuario</span><input name="usuario" autocomplete="username" required autocapitalize="none"></label>
         <label class="campo"><span>Contraseña</span><input name="clave" type="password" autocomplete="current-password" required></label>
@@ -354,7 +362,9 @@ async function traerDia(forzar = false) {
     E.etag = r.etag;
     renderSeguro();
   } catch (e) {
-    if (forzar && e.status !== 401) aviso(e.message, 'error');
+    // Las lecturas automáticas no muestran avisos por rechazos sueltos: se reintenta en unos segundos.
+    if (e.silencioso) setTimeout(() => traerDia(true), 3000);
+    else if (forzar && e.status !== 401 && e.status !== 0) aviso(e.message, 'error');
   }
 }
 
@@ -426,7 +436,7 @@ function render() {
   const vistas = { inicio: vistaInicio, sentido: vistaSentido, hoy: vistaHoy, nuevo: vistaNuevo, fijos: vistaFijos, choferes: vistaChoferes, horarios: vistaHorarios };
   app.innerHTML = `
     <header class="top">
-      <a class="marca" href="#/inicio">${ICONO.pin}<span><b>Remisería</b><small>Sistema de gestión · Chascomús ⇄ La Plata</small></span></a>
+      <a class="marca" href="#/inicio">${ICONO.pin}<span><b>Otero Viajes</b><small>Sistema de gestión · Chascomús ⇄ La Plata</small></span></a>
       <div class="espacio"></div>
       <div id="estado" class="estado"></div>
       <div class="hola">
@@ -439,7 +449,7 @@ function render() {
       ${menu.map(([k, href, txt]) => `<a href="${href}" ${k === actual ? 'aria-current="page"' : ''}>${txt}</a>`).join('')}
     </nav>
     <main class="contenido">${vistas[E.vista]()}</main>
-    <footer class="pie">Remisería · Chascomús ⇄ La Plata · versión ${VERSION}</footer>`;
+    <footer class="pie">Otero Viajes · Chascomús ⇄ La Plata · versión ${VERSION}</footer>`;
   pintarEstado();
   window.scrollTo(0, scroll);
   E.renderPendiente = false;

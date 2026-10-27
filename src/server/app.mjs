@@ -22,7 +22,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { cookieBorrar, cookieSesion, crearSesion, leerCookie, leerUsuarios, revisarSesion, verificarClave } from './auth.mjs';
 
 // Versión del sistema. Tiene que coincidir con VERSION en public/app.js.
-export const VERSION = '8';
+export const VERSION = '9';
 
 export function hoyArgentina(fecha = new Date()) {
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' }).format(fecha);
@@ -317,7 +317,7 @@ export function crearApp({ store, entorno }) {
       const bearer = (req.headers.get('authorization') || '').replace(/^Bearer\s+/i, '').trim();
       const sesion = porCookie.usuario ? porCookie : bearer ? revisarSesion(bearer, secreto) : porCookie;
       if (!sesion.usuario) {
-        return json({ error: 'Tenés que iniciar sesión.', motivo: sesion.motivo }, 401);
+        return json({ error: 'Tenés que iniciar sesión.', motivo: sesion.motivo, instancia }, 401);
       }
       const usuariosAhora = leerUsuarios(env('USUARIOS'));
       if (usuariosAhora.size > 0 && !usuariosAhora.has(sesion.usuario)) {
