@@ -22,7 +22,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { cookieBorrar, cookieSesion, crearSesion, leerCookie, leerUsuarios, revisarSesion, verificarClave } from './auth.mjs';
 
 // Versión del sistema. Tiene que coincidir con VERSION en public/app.js.
-export const VERSION = '7';
+export const VERSION = '8';
 
 export function hoyArgentina(fecha = new Date()) {
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' }).format(fecha);

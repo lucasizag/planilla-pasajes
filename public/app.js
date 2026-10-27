@@ -2,7 +2,7 @@
 // Sin frameworks: todo el estado vive en `E` y la pantalla se vuelve a dibujar con render().
 
 // Versión de la página. Tiene que coincidir con VERSION en src/server/app.mjs.
-const VERSION = '7';
+const VERSION = '8';
 
 const SENTIDOS = { CL: 'Chascomús → La Plata', LC: 'La Plata → Chascomús' };
 const CORTO = { CL: 'CH → LP', LC: 'LP → CH' };
@@ -116,7 +116,11 @@ let tokenSesion = null;
 try {
   tokenSesion = localStorage.getItem('sesion');
 } catch {}
+// Cada vez que se entra o se sale, cambia la "generación" de la sesión. Así, una respuesta
+// que llega tarde de una sesión anterior no puede cerrar la sesión nueva.
+let generacionSesion = 0;
 function guardarToken(t) {
+  generacionSesion++;
   tokenSesion = t || null;
   try {
     if (t) localStorage.setItem('sesion', t);
@@ -133,7 +137,26 @@ const MOTIVOS = {
   'sin-secreto': 'falta configurar SESSION_SECRET',
 };
 
+// Otra pestaña entró al sistema: se usa su sesión nueva. (Si otra pestaña sale, esta no se toca.)
+window.addEventListener('storage', (ev) => {
+  if (ev.key === 'sesion' && ev.newValue) {
+    generacionSesion++;
+    tokenSesion = ev.newValue;
+  }
+});
+
+// Confirma con el servidor si la sesión actual sigue sirviendo.
+async function sesionSigueValida() {
+  try {
+    const r = await fetch('/api/yo', { headers: tokenSesion ? { authorization: `Bearer ${tokenSesion}` } : {}, cache: 'no-store', credentials: 'same-origin' });
+    return r.ok;
+  } catch {
+    return true; // sin conexión: no se saca a nadie
+  }
+}
+
 async function api(metodo, ruta, cuerpo, headers = {}, reintento = false) {
+  const generacion = generacionSesion;
   let r;
   try {
     r = await fetch('/api' + ruta, {
@@ -158,6 +181,13 @@ async function api(metodo, ruta, cuerpo, headers = {}, reintento = false) {
   }
   if (r.status === 401 && ruta !== '/login') {
     if (!E.usuario && $('#form-login')) throw Object.assign(new Error('Sesión vencida'), { status: 401 });
+    // Respuesta vieja de una sesión anterior: se ignora.
+    if (generacion !== generacionSesion) throw Object.assign(new Error('Sesión anterior'), { status: 401, ignorar: true });
+    // Antes de sacar al usuario, se confirma que la sesión de verdad no sirve.
+    if (ruta !== '/yo' && (await sesionSigueValida())) {
+      throw Object.assign(new Error('No se pudo completar. Probá de nuevo.'), { status: 503 });
+    }
+    if (generacion !== generacionSesion) throw Object.assign(new Error('Sesión anterior'), { status: 401, ignorar: true });
     const yaLogueado = !!E.usuario;
     E.usuario = null;
     guardarToken(null);
