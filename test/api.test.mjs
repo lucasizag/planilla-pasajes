@@ -173,3 +173,20 @@ test('sesión por token cuando el navegador no guarda la cookie, y motivo del 40
   const t2 = (await r2.json()).token;
   for (const t of [token, t2]) assert.equal((await app(new Request(`${BASE}/yo`, { headers: { authorization: `Bearer ${t}` } }))).status, 200);
 });
+
+test('dos copias de la función comparten la clave de sesión aunque sus variables difieran', async () => {
+  const store = storeEnMemoria();
+  const copiaA = crearApp({ store, entorno: { USUARIOS: `laplata:${h}`, SESSION_SECRET: 'uno' } });
+  const copiaB = crearApp({ store, entorno: { USUARIOS: `laplata:${h}`, SESSION_SECRET: 'otro-distinto' } });
+  // arrancan las dos a la vez (como dos instancias frías en Netlify)
+  const [r] = await Promise.all([
+    copiaA(new Request(`${BASE}/login`, { method: 'POST', body: JSON.stringify({ usuario: 'laplata', clave: 'x' }) })),
+    copiaB(new Request(`${BASE}/diagnostico`)),
+  ]);
+  const { token } = await r.json();
+  const dA = await (await copiaA(new Request(`${BASE}/diagnostico`))).json();
+  const dB = await (await copiaB(new Request(`${BASE}/diagnostico`, { headers: { authorization: `Bearer ${token}` } }))).json();
+  assert.equal(dA.huellaClave, dB.huellaClave);
+  assert.equal(dB.token, 'ok');
+  assert.equal((await copiaB(new Request(`${BASE}/yo`, { headers: { authorization: `Bearer ${token}` } }))).status, 200);
+});

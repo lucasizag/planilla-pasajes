@@ -18,6 +18,7 @@ import {
   SENTIDOS,
 } from './logic.mjs';
 import { actualizar, leer, leerOCrear } from './datos.mjs';
+import { createHash, randomBytes } from 'node:crypto';
 import { cookieBorrar, cookieSesion, crearSesion, leerCookie, leerUsuarios, revisarSesion, verificarClave } from './auth.mjs';
 
 export function hoyArgentina(fecha = new Date()) {
@@ -245,18 +246,48 @@ export function crearApp({ store, entorno }) {
     return json({ error: 'No encontrado' }, 404);
   }
 
+  // Clave para firmar las sesiones. Se guarda en la base de datos (Blobs) para que TODAS las
+  // copias de la función usen exactamente la misma, sin depender de variables de entorno.
+  const instancia = randomBytes(4).toString('hex');
+  let secretoPromesa = null;
+  const obtenerSecreto = () => {
+    if (!secretoPromesa) {
+      secretoPromesa = leerOCrear(store, '_secreto-sesion', () => ({ valor: randomBytes(32).toString('hex') }))
+        .then(({ datos }) => datos.valor)
+        .catch((e) => {
+          secretoPromesa = null;
+          throw e;
+        });
+    }
+    return secretoPromesa;
+  };
+
   return async function manejar(req) {
     const url = new URL(req.url);
     const partes = url.pathname.replace(/^\/api\/?/, '').split('/').filter(Boolean).map(decodeURIComponent);
     const segura = url.protocol === 'https:';
-    const secreto = env('SESSION_SECRET');
 
     try {
+      const secreto = await obtenerSecreto();
+
+      // Diagnóstico sin datos sensibles: /api/diagnostico
+      if (partes[0] === 'diagnostico') {
+        const porCookie = revisarSesion(leerCookie(req, 'sesion'), secreto);
+        const bearer = (req.headers.get('authorization') || '').replace(/^Bearer\s+/i, '').trim();
+        return json({
+          instancia,
+          huellaClave: createHash('sha256').update(secreto).digest('hex').slice(0, 8),
+          usuarios: [...leerUsuarios(env('USUARIOS')).keys()],
+          cookie: porCookie.usuario ? 'ok' : porCookie.motivo,
+          token: bearer ? (revisarSesion(bearer, secreto).usuario ? 'ok' : revisarSesion(bearer, secreto).motivo) : 'no enviado',
+          hora: new Date().toISOString(),
+        });
+      }
+
       if (partes[0] === 'login' && req.method === 'POST') {
         const usuarios = leerUsuarios(env('USUARIOS'));
         const faltan = [];
         if (usuarios.size === 0) faltan.push(env('USUARIOS') ? 'USUARIOS tiene un formato inválido' : 'falta USUARIOS');
-        if (!secreto) faltan.push('falta SESSION_SECRET');
         if (faltan.length) {
           return json({ error: `El sistema todavía no está configurado: ${faltan.join(' y ')}. Revisá las variables en Netlify y volvé a desplegar.` }, 500);
         }
@@ -285,7 +316,8 @@ export function crearApp({ store, entorno }) {
       if (!sesion.usuario) {
         return json({ error: 'Tenés que iniciar sesión.', motivo: sesion.motivo }, 401);
       }
-      if (!leerUsuarios(env('USUARIOS')).has(sesion.usuario)) {
+      const usuariosAhora = leerUsuarios(env('USUARIOS'));
+      if (usuariosAhora.size > 0 && !usuariosAhora.has(sesion.usuario)) {
         return json({ error: 'Tenés que iniciar sesión.', motivo: 'usuario-inexistente' }, 401);
       }
       const usuario = sesion.usuario;

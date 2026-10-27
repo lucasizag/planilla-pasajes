@@ -130,7 +130,7 @@ const MOTIVOS = {
   'sin-secreto': 'falta configurar SESSION_SECRET',
 };
 
-async function api(metodo, ruta, cuerpo, headers = {}) {
+async function api(metodo, ruta, cuerpo, headers = {}, reintento = false) {
   let r;
   try {
     r = await fetch('/api' + ruta, {
@@ -147,7 +147,13 @@ async function api(metodo, ruta, cuerpo, headers = {}) {
   marcarConexion(true);
   if (r.status === 304) return { sinCambios: true };
   const datos = await r.json().catch(() => ({}));
+  if (r.status === 401 && ruta !== '/login' && !reintento && (tokenSesion || E.usuario)) {
+    // Un 401 suelto puede ser pasajero: se reintenta una vez antes de cerrar la sesión.
+    await new Promise((res) => setTimeout(res, 800));
+    return api(metodo, ruta, cuerpo, headers, true);
+  }
   if (r.status === 401 && ruta !== '/login') {
+    if (!E.usuario && $('#form-login')) throw Object.assign(new Error('Sesión vencida'), { status: 401 });
     const yaLogueado = !!E.usuario;
     E.usuario = null;
     guardarToken(null);
