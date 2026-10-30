@@ -212,3 +212,29 @@ test('la sesión sirve aunque un programa borre la cookie y el encabezado Author
   assert.equal(res.status, 200);
   await app(new Request(`${BASE}/fijos/${creado.id}`, { method: 'DELETE', headers: { 'x-sesion': token } }));
 });
+
+test('vía alternativa: guardar mandando el pedido como GET, solo con token', async () => {
+  const r = await app(new Request(`${BASE}/login`, { method: 'POST', body: JSON.stringify({ usuario: 'laplata', clave: 'x' }) }));
+  const cookie = r.headers.get('set-cookie').split(';')[0];
+  const { token } = await r.json();
+  const F = '2026-11-03';
+  const { dia } = await (await app(new Request(`${BASE}/dias/${F}`, { headers: { 'x-sesion': token } }))).json();
+  const franja = dia.franjas.find((f) => f.sentido === 'LC');
+  const b64 = (o) => Buffer.from(JSON.stringify(o)).toString('base64url');
+  const op = { op: { tipo: 'agregarPasajero', franjaId: franja.id, autoId: franja.autos[0].id, lugar: 0, pasajero: { nombre: 'CATALINA SURDO', sube: '45 / 6 - 7 N. 569 DEPTO. 3', baja: 'CAPELLAN CALDERON 100' } } };
+  const q = (extra) => `${BASE}/via-get?m=POST&r=${encodeURIComponent(`/dias/${F}`)}&b=${b64(op)}${extra}`;
+  // con solo la cookie: no (protección contra ataques desde otros sitios)
+  assert.equal((await app(new Request(q(''), { headers: { cookie } }))).status, 401);
+  // con token: guarda
+  const ok = await app(new Request(q(`&s=${token}`)));
+  assert.equal(ok.status, 200);
+  const res = await ok.json();
+  assert.equal(res.resultado.pasajero.nombre, 'CATALINA SURDO');
+  // rutas prohibidas
+  assert.equal((await app(new Request(`${BASE}/via-get?m=POST&r=/login&s=${token}`))).status, 400);
+  assert.equal((await app(new Request(`${BASE}/via-get?m=GET&r=/yo&s=${token}`))).status, 400);
+  // reportes
+  await app(new Request(`${BASE}/reporte?d=${b64({ paso: 'prueba', metodo: 'POST', ruta: '/dias/x', status: 401 })}`));
+  const { reportes } = await (await app(new Request(`${BASE}/reportes`, { headers: { 'x-sesion': token } }))).json();
+  assert.equal(reportes[0].paso, 'prueba');
+});

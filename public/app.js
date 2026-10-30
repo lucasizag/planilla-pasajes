@@ -2,7 +2,7 @@
 // Sin frameworks: todo el estado vive en `E` y la pantalla se vuelve a dibujar con render().
 
 // Versión de la página. Tiene que coincidir con VERSION en src/server/app.mjs.
-const VERSION = '10';
+const VERSION = '11';
 
 const SENTIDOS = { CL: 'Chascomús → La Plata', LC: 'La Plata → Chascomús' };
 const CORTO = { CL: 'CH → LP', LC: 'LP → CH' };
@@ -155,6 +155,38 @@ async function sesionSigueValida() {
   }
 }
 
+function aBase64url(texto) {
+  return btoa(unescape(encodeURIComponent(texto))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+// Deja registrado en el servidor un fallo de esta computadora (por la vía que sí funciona: GET).
+function reportar(info) {
+  try {
+    fetch(`/api/reporte?d=${aBase64url(JSON.stringify({ ...info, version: VERSION }))}&_=${Date.now()}`, { cache: 'no-store' }).catch(() => {});
+  } catch {}
+}
+
+// Vía alternativa: manda el guardado como pedido de lectura (GET). El servidor lo acepta solo con el token.
+async function apiViaGet(metodo, ruta, cuerpo) {
+  const qs = new URLSearchParams({ m: metodo, r: ruta, b: aBase64url(JSON.stringify(cuerpo || {})), s: tokenSesion || '', _: Date.now().toString(36) });
+  let r;
+  try {
+    r = await fetch(`/api/via-get?${qs}`, { headers: tokenSesion ? { 'x-sesion': tokenSesion } : {}, cache: 'no-store', credentials: 'same-origin' });
+  } catch {
+    throw Object.assign(new Error('Sin conexión a internet. Revisá la conexión y probá de nuevo.'), { status: 0 });
+  }
+  const texto = await r.text();
+  let datos = {};
+  try {
+    datos = JSON.parse(texto);
+  } catch {}
+  if (!r.ok) {
+    reportar({ paso: 'via-get', metodo, ruta, status: r.status, respuesta: texto.slice(0, 300), server: r.headers.get('server') || '', motivo: datos.motivo });
+    throw Object.assign(new Error(datos.error || 'No se pudo completar. Probá de nuevo.'), { status: r.status === 401 ? 503 : r.status });
+  }
+  return datos;
+}
+
 async function api(metodo, ruta, cuerpo, headers = {}, reintento = false, confirmado = false) {
   const generacion = generacionSesion;
   // Marca única en cada lectura, para que ningún intermediario (antivirus, proxy) devuelva una respuesta vieja.
@@ -170,13 +202,31 @@ async function api(metodo, ruta, cuerpo, headers = {}, reintento = false, confir
       credentials: 'same-origin',
     });
   } catch {
+    // Un guardado que ni siquiera sale puede estar bloqueado por un programa: se prueba la vía alternativa.
+    if (metodo !== 'GET' && tokenSesion && ruta !== '/login' && ruta !== '/logout') {
+      reportar({ paso: 'fetch-fallo', metodo, ruta });
+      try {
+        const res = await apiViaGet(metodo, ruta, cuerpo);
+        marcarConexion(true);
+        return res;
+      } catch {}
+    }
     marcarConexion(false);
     throw Object.assign(new Error('Sin conexión a internet. Revisá la conexión y probá de nuevo.'), { status: 0 });
   }
   marcarConexion(true);
   revisarVersion(r.headers.get('x-version'));
   if (r.status === 304) return { sinCambios: true };
-  const datos = await r.json().catch(() => ({}));
+  const textoRespuesta = await r.text().catch(() => '');
+  let datos = {};
+  try {
+    datos = JSON.parse(textoRespuesta);
+  } catch {}
+  // Respuestas raras a un guardado (bloqueos de programas intermedios): vía alternativa.
+  if (metodo !== 'GET' && tokenSesion && [403, 405, 407].includes(r.status) && ruta !== '/login' && ruta !== '/logout') {
+    reportar({ paso: 'post-bloqueado', metodo, ruta, status: r.status, respuesta: textoRespuesta.slice(0, 300), server: r.headers.get('server') || '' });
+    return apiViaGet(metodo, ruta, cuerpo);
+  }
   if (r.status === 401 && ruta !== '/login' && !reintento && (tokenSesion || E.usuario)) {
     // Un 401 suelto puede ser pasajero: se reintenta una vez antes de cerrar la sesión.
     await new Promise((res) => setTimeout(res, 800));
@@ -190,6 +240,9 @@ async function api(metodo, ruta, cuerpo, headers = {}, reintento = false, confir
     console.warn('[sesión] pedido rechazado', metodo, ruta, datos.motivo || '', 'llegó por:', (datos.recibido || []).join(', ') || 'nada', datos.instancia || '');
     if (ruta !== '/yo' && (await sesionSigueValida())) {
       // La sesión sirve: fue un rechazo suelto. Se reintenta una vez más antes de rendirse.
+      reportar({ paso: 'rechazo-con-sesion-valida', metodo, ruta, status: r.status, respuesta: textoRespuesta.slice(0, 300), server: r.headers.get('server') || '', motivo: datos.motivo, recibido: datos.recibido });
+      // Si es un guardado, se usa la vía alternativa (como lectura), que en estas computadoras sí pasa.
+      if (metodo !== 'GET' && tokenSesion) return apiViaGet(metodo, ruta, cuerpo);
       if (!confirmado) {
         await new Promise((res) => setTimeout(res, 600));
         return api(metodo, ruta, cuerpo, headers, true, true);

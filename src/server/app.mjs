@@ -22,7 +22,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { cookieBorrar, cookieSesion, crearSesion, leerCookie, leerUsuarios, revisarSesion, verificarClave } from './auth.mjs';
 
 // Versión del sistema. Tiene que coincidir con VERSION en public/app.js.
-export const VERSION = '10';
+export const VERSION = '11';
 
 export function hoyArgentina(fecha = new Date()) {
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' }).format(fecha);
@@ -241,6 +241,11 @@ export function crearApp({ store, entorno }) {
       }
     }
 
+    // /api/reportes: últimos fallos registrados
+    if (partes[0] === 'reportes' && metodo === 'GET') {
+      return json({ reportes: (await leer(store, 'reportes')).datos || [] });
+    }
+
     // /api/agenda
     if (partes[0] === 'agenda' && metodo === 'GET') {
       return json({ agenda: (await leer(store, 'agenda')).datos || [] });
@@ -272,6 +277,44 @@ export function crearApp({ store, entorno }) {
 
     try {
       const secreto = await obtenerSecreto();
+
+      // Registro de fallos que manda la página (para diagnosticar computadoras con problemas).
+      if (partes[0] === 'reporte' && req.method === 'GET') {
+        try {
+          const crudo = (url.searchParams.get('d') || '').slice(0, 6000);
+          const d = JSON.parse(Buffer.from(crudo, 'base64url').toString('utf8'));
+          const limpio = {};
+          for (const k of ['metodo', 'ruta', 'status', 'respuesta', 'server', 'version', 'motivo', 'recibido', 'paso']) {
+            if (d[k] != null) limpio[k] = typeof d[k] === 'string' ? d[k].slice(0, 400) : d[k];
+          }
+          await actualizar(store, 'reportes', (l) => {
+            l.unshift({ ...limpio, en: new Date().toISOString(), navegador: (req.headers.get('user-agent') || '').slice(0, 160) });
+            if (l.length > 40) l.length = 40;
+          }, () => []);
+        } catch {}
+        return json({ ok: true });
+      }
+
+      // Vía alternativa para guardar: el mismo pedido, pero mandado como lectura (GET).
+      // Sirve en computadoras donde algún programa bloquea los pedidos POST/PUT/DELETE.
+      // Solo se acepta con el token de sesión (nunca solo con la cookie), así no sirve para ataques desde otros sitios.
+      if (partes[0] === 'via-get' && req.method === 'GET') {
+        const m = (url.searchParams.get('m') || '').toUpperCase();
+        const r = url.searchParams.get('r') || '';
+        if (!['POST', 'PUT', 'DELETE'].includes(m) || !r.startsWith('/') || /^\/(via-get|login|logout|reporte)/.test(r)) {
+          return json({ error: 'Pedido inválido.' }, 400);
+        }
+        const token = url.searchParams.get('s') || (req.headers.get('x-sesion') || '').trim() || (req.headers.get('authorization') || '').replace(/^Bearer\s+/i, '').trim();
+        if (!revisarSesion(token, secreto).usuario) return json({ error: 'Tenés que iniciar sesión.', motivo: 'via-get-sin-token', instancia }, 401);
+        const b = url.searchParams.get('b');
+        const cuerpoTexto = b ? Buffer.from(b, 'base64url').toString('utf8') : '{}';
+        const interno = new Request(new URL('/api' + r, url.origin), {
+          method: m,
+          headers: { 'content-type': 'application/json', 'x-sesion': token },
+          body: cuerpoTexto,
+        });
+        return manejar(interno);
+      }
 
       // Diagnóstico sin datos sensibles: /api/diagnostico
       if (partes[0] === 'diagnostico') {
