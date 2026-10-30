@@ -2,7 +2,7 @@
 // Sin frameworks: todo el estado vive en `E` y la pantalla se vuelve a dibujar con render().
 
 // Versión de la página. Tiene que coincidir con VERSION en src/server/app.mjs.
-const VERSION = '9';
+const VERSION = '10';
 
 const SENTIDOS = { CL: 'Chascomús → La Plata', LC: 'La Plata → Chascomús' };
 const CORTO = { CL: 'CH → LP', LC: 'LP → CH' };
@@ -148,7 +148,7 @@ window.addEventListener('storage', (ev) => {
 // Confirma con el servidor si la sesión actual sigue sirviendo.
 async function sesionSigueValida() {
   try {
-    const r = await fetch('/api/yo', { headers: tokenSesion ? { authorization: `Bearer ${tokenSesion}` } : {}, cache: 'no-store', credentials: 'same-origin' });
+    const r = await fetch('/api/yo?_=' + Date.now(), { headers: tokenSesion ? { authorization: `Bearer ${tokenSesion}`, 'x-sesion': tokenSesion } : {}, cache: 'no-store', credentials: 'same-origin' });
     return r.ok;
   } catch {
     return true; // sin conexión: no se saca a nadie
@@ -163,8 +163,9 @@ async function api(metodo, ruta, cuerpo, headers = {}, reintento = false, confir
   try {
     r = await fetch(url, {
       method: metodo,
-      headers: { 'content-type': 'application/json', ...(tokenSesion ? { authorization: `Bearer ${tokenSesion}` } : {}), ...headers },
-      body: cuerpo ? JSON.stringify(cuerpo) : undefined,
+      // La sesión viaja por varias vías (por si algún programa de la computadora borra alguna).
+      headers: { 'content-type': 'application/json', ...(tokenSesion ? { authorization: `Bearer ${tokenSesion}`, 'x-sesion': tokenSesion } : {}), ...headers },
+      body: metodo === 'GET' ? undefined : JSON.stringify(tokenSesion ? { ...(cuerpo || {}), _sesion: tokenSesion } : cuerpo || {}),
       cache: 'no-store',
       credentials: 'same-origin',
     });
@@ -186,7 +187,7 @@ async function api(metodo, ruta, cuerpo, headers = {}, reintento = false, confir
     // Respuesta vieja de una sesión anterior: se ignora.
     if (generacion !== generacionSesion) throw Object.assign(new Error('Sesión anterior'), { status: 401, ignorar: true });
     // Antes de sacar al usuario, se confirma que la sesión de verdad no sirve.
-    console.warn('[sesión] pedido rechazado', ruta, datos.motivo || '', datos.instancia || '');
+    console.warn('[sesión] pedido rechazado', metodo, ruta, datos.motivo || '', 'llegó por:', (datos.recibido || []).join(', ') || 'nada', datos.instancia || '');
     if (ruta !== '/yo' && (await sesionSigueValida())) {
       // La sesión sirve: fue un rechazo suelto. Se reintenta una vez más antes de rendirse.
       if (!confirmado) {

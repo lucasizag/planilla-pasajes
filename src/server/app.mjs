@@ -22,7 +22,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { cookieBorrar, cookieSesion, crearSesion, leerCookie, leerUsuarios, revisarSesion, verificarClave } from './auth.mjs';
 
 // Versión del sistema. Tiene que coincidir con VERSION en public/app.js.
-export const VERSION = '9';
+export const VERSION = '10';
 
 export function hoyArgentina(fecha = new Date()) {
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' }).format(fecha);
@@ -283,6 +283,7 @@ export function crearApp({ store, entorno }) {
           usuarios: [...leerUsuarios(env('USUARIOS')).keys()],
           cookie: porCookie.usuario ? 'ok' : porCookie.motivo,
           token: bearer ? (revisarSesion(bearer, secreto).usuario ? 'ok' : revisarSesion(bearer, secreto).motivo) : 'no enviado',
+          xSesion: req.headers.get('x-sesion') ? (revisarSesion(req.headers.get('x-sesion'), secreto).usuario ? 'ok' : 'inválido') : 'no enviado',
           hora: new Date().toISOString(),
         });
       }
@@ -312,12 +313,33 @@ export function crearApp({ store, entorno }) {
         return json({ ok: true }, 200, { 'set-cookie': cookieBorrar(segura) });
       }
 
-      // Primero la cookie; si no sirve, el token del encabezado Authorization.
-      const porCookie = revisarSesion(leerCookie(req, 'sesion'), secreto);
+      // La sesión puede llegar por varias vías: cookie, encabezado Authorization, encabezado
+      // X-Sesion o dentro del cuerpo (_sesion). Algunos antivirus o proxies borran alguna de ellas;
+      // alcanza con que llegue una válida.
+      const candidatos = [];
+      const deCookie = leerCookie(req, 'sesion');
+      if (deCookie) candidatos.push(['cookie', deCookie]);
       const bearer = (req.headers.get('authorization') || '').replace(/^Bearer\s+/i, '').trim();
-      const sesion = porCookie.usuario ? porCookie : bearer ? revisarSesion(bearer, secreto) : porCookie;
+      if (bearer && bearer !== 'null') candidatos.push(['authorization', bearer]);
+      const xSesion = (req.headers.get('x-sesion') || '').trim();
+      if (xSesion) candidatos.push(['x-sesion', xSesion]);
+      if (req.method !== 'GET' && req.method !== 'HEAD') {
+        try {
+          const b = await req.clone().json();
+          if (b && typeof b._sesion === 'string' && b._sesion) candidatos.push(['cuerpo', b._sesion]);
+        } catch {}
+      }
+      let sesion = { motivo: 'sin-sesion' };
+      for (const [, token] of candidatos) {
+        const r = revisarSesion(token, secreto);
+        if (r.usuario) {
+          sesion = r;
+          break;
+        }
+        sesion = r;
+      }
       if (!sesion.usuario) {
-        return json({ error: 'Tenés que iniciar sesión.', motivo: sesion.motivo, instancia }, 401);
+        return json({ error: 'Tenés que iniciar sesión.', motivo: sesion.motivo, instancia, recibido: candidatos.map(([via]) => via) }, 401);
       }
       const usuariosAhora = leerUsuarios(env('USUARIOS'));
       if (usuariosAhora.size > 0 && !usuariosAhora.has(sesion.usuario)) {

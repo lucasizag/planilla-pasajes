@@ -190,3 +190,25 @@ test('dos copias de la función comparten la clave de sesión aunque sus variabl
   assert.equal(dB.token, 'ok');
   assert.equal((await copiaB(new Request(`${BASE}/yo`, { headers: { authorization: `Bearer ${token}` } }))).status, 200);
 });
+
+test('la sesión sirve aunque un programa borre la cookie y el encabezado Authorization', async () => {
+  const r = await app(new Request(`${BASE}/login`, { method: 'POST', body: JSON.stringify({ usuario: 'laplata', clave: 'x' }) }));
+  const { token } = await r.json();
+  const fijo = { nombre: 'Prueba Vías', sentido: 'CL', horarios: { 3: { ida: '06:00', vuelta: '12:00' } } };
+  // solo X-Sesion
+  let res = await app(new Request(`${BASE}/fijos`, { method: 'POST', headers: { 'x-sesion': token }, body: JSON.stringify({ fijo }) }));
+  assert.equal(res.status, 200);
+  const { fijo: creado } = await res.json();
+  // solo en el cuerpo
+  res = await app(new Request(`${BASE}/fijos/${creado.id}`, { method: 'PUT', body: JSON.stringify({ fijo: { ...fijo, nombre: 'Prueba Vías 2' }, _sesion: token }) }));
+  assert.equal(res.status, 200);
+  assert.equal((await res.json()).fijo.nombre, 'Prueba Vías 2');
+  // nada: 401 y dice qué llegó
+  res = await app(new Request(`${BASE}/fijos/${creado.id}`, { method: 'PUT', body: JSON.stringify({ fijo }) }));
+  assert.equal(res.status, 401);
+  assert.deepEqual((await res.json()).recibido, []);
+  // una vía inválida y otra válida: entra
+  res = await app(new Request(`${BASE}/yo`, { headers: { authorization: 'Bearer basura.x', 'x-sesion': token } }));
+  assert.equal(res.status, 200);
+  await app(new Request(`${BASE}/fijos/${creado.id}`, { method: 'DELETE', headers: { 'x-sesion': token } }));
+});
