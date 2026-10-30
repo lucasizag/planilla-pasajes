@@ -10,12 +10,23 @@ const leerVariable = (k) => {
   return (process.env[k] || '').trim();
 };
 
+// IMPORTANTE: la conexión a Netlify Blobs se abre de nuevo en cada operación.
+// Netlify da una credencial que vence; si se reutiliza la misma conexión en una
+// función que queda "despierta", después de un rato falla con "Token expired".
+const abrir = () => getStore({ name: 'planilla', consistency: 'strong' });
+const store = {
+  getWithMetadata: (...a) => abrir().getWithMetadata(...a),
+  setJSON: (...a) => abrir().setJSON(...a),
+  list: (...a) => abrir().list(...a),
+  delete: (...a) => abrir().delete(...a),
+};
+
 let manejar;
 
 export default async (req) => {
   if (!manejar) {
     manejar = crearApp({
-      store: getStore({ name: 'planilla', consistency: 'strong' }),
+      store,
       entorno: { USUARIOS: leerVariable('USUARIOS'), SESSION_SECRET: leerVariable('SESSION_SECRET') },
     });
   }

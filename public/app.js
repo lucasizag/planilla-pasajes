@@ -2,7 +2,7 @@
 // Sin frameworks: todo el estado vive en `E` y la pantalla se vuelve a dibujar con render().
 
 // Versión de la página. Tiene que coincidir con VERSION en src/server/app.mjs.
-const VERSION = '11';
+const VERSION = '12';
 
 const SENTIDOS = { CL: 'Chascomús → La Plata', LC: 'La Plata → Chascomús' };
 const CORTO = { CL: 'CH → LP', LC: 'LP → CH' };
@@ -417,7 +417,7 @@ async function traerDia(forzar = false) {
     renderSeguro();
   } catch (e) {
     // Las lecturas automáticas no muestran avisos por rechazos sueltos: se reintenta en unos segundos.
-    if (e.silencioso) setTimeout(() => traerDia(true), 3000);
+    if (e.silencioso || e.status === 503) setTimeout(() => traerDia(true), 3000);
     else if (forzar && e.status !== 401 && e.status !== 0) aviso(e.message, 'error');
   }
 }

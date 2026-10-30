@@ -22,7 +22,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { cookieBorrar, cookieSesion, crearSesion, leerCookie, leerUsuarios, revisarSesion, verificarClave } from './auth.mjs';
 
 // Versión del sistema. Tiene que coincidir con VERSION en public/app.js.
-export const VERSION = '11';
+export const VERSION = '12';
 
 export function hoyArgentina(fecha = new Date()) {
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' }).format(fecha);
@@ -398,9 +398,13 @@ export function crearApp({ store, entorno }) {
 
       return await rutas(req, usuario, partes);
     } catch (e) {
-      const status = e.status || 500;
-      if (status >= 500) console.error(e);
-      return json({ error: status >= 500 && !e.status ? 'Error inesperado. Probá de nuevo.' : e.message }, status);
+      // Solo los errores propios del sistema conservan su código. Cualquier otro (por ejemplo,
+      // un error interno de Netlify Blobs, que puede venir con código 401) se informa como 503,
+      // para que la página no lo confunda con una sesión vencida.
+      const propio = e instanceof ErrorNegocio || e.propio === true;
+      const status = propio ? e.status || 500 : 503;
+      if (!propio || status >= 500) console.error(e);
+      return json({ error: propio ? e.message : 'El servidor tuvo un problema momentáneo. Probá de nuevo.', interno: propio ? undefined : String(e.message || e).slice(0, 200) }, status);
     }
   };
 }

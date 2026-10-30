@@ -238,3 +238,24 @@ test('vía alternativa: guardar mandando el pedido como GET, solo con token', as
   const { reportes } = await (await app(new Request(`${BASE}/reportes`, { headers: { 'x-sesion': token } }))).json();
   assert.equal(reportes[0].paso, 'prueba');
 });
+
+test('un error interno de Netlify Blobs (con código 401) no se confunde con sesión vencida', async () => {
+  const base = storeEnMemoria();
+  let fallar = false;
+  const errorBlobs = () => Object.assign(new Error('Netlify Blobs has generated an internal error (Failed to decode token: Token expired)'), { name: 'BlobsInternalError', status: 401 });
+  const store = {
+    getWithMetadata: async (...a) => { if (fallar) throw errorBlobs(); return base.getWithMetadata(...a); },
+    setJSON: async (...a) => { if (fallar) throw errorBlobs(); return base.setJSON(...a); },
+    list: (...a) => base.list(...a),
+    delete: (...a) => base.delete(...a),
+  };
+  const ap = crearApp({ store, entorno: { USUARIOS: `laplata:${h}` } });
+  const { token } = await (await ap(new Request(`${BASE}/login`, { method: 'POST', body: JSON.stringify({ usuario: 'laplata', clave: 'x' }) }))).json();
+  fallar = true;
+  const r = await ap(new Request(`${BASE}/choferes`, { headers: { 'x-sesion': token } }));
+  assert.equal(r.status, 503);
+  // la sesión sigue siendo válida
+  assert.equal((await ap(new Request(`${BASE}/yo`, { headers: { 'x-sesion': token } }))).status, 200);
+  fallar = false;
+  assert.equal((await ap(new Request(`${BASE}/choferes`, { headers: { 'x-sesion': token } }))).status, 200);
+});

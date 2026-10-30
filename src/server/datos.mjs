@@ -21,7 +21,7 @@ export async function actualizar(store, clave, fn, crear) {
     if (r.modified) return { datos, etag: r.etag, resultado };
     await new Promise((res) => setTimeout(res, 40 + Math.random() * 120 * (intento + 1)));
   }
-  throw Object.assign(new Error('Hay mucho movimiento en este momento. Probá de nuevo.'), { status: 503 });
+  throw Object.assign(new Error('Hay mucho movimiento en este momento. Probá de nuevo.'), { status: 503, propio: true });
 }
 
 // Lee y, si no existe, crea con onlyIfNew (para que dos que abren el día a la vez no lo pisen).
